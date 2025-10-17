@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PDF Merger / Reorder / Delete (Client‑only)</title>
+  <style>
+    :root { --bg:#0b1020; --panel:#11182a; --muted:#aab3c5; --accent:#4cc9f0; --text:#e8eefc; }
+    html,body{height:100%;}
+    body{margin:0;background:linear-gradient(180deg,#0b1020,#0e1530);color:var(--text);font-family:ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Noto Sans, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";}
+    header{padding:18px 20px;border-bottom:1px solid #1c2440;background:#0d1428;position:sticky;top:0;z-index:5}
+    header h1{margin:0;font-size:18px;letter-spacing:.2px}
+    .container{max-width:980px;margin:0 auto;padding:18px}
+    .panel{background:var(--panel);border:1px solid #1e2a4a;border-radius:16px;padding:16px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    .filedrop{flex:1 1 340px;border:2px dashed #2a3a6a;border-radius:14px;padding:18px;text-align:center;background:rgba(255,255,255,.02)}
+    .filedrop.drag{background:rgba(76,201,240,.08);border-color:var(--accent)}
+    .hint{color:var(--muted);font-size:13px}
+    .btn{appearance:none;border:1px solid #2a3a6a;background:#0f1a35;color:var(--text);border-radius:12px;padding:10px 14px;cursor:pointer;font-weight:600}
+    .btn:hover{border-color:#3a4a7a;background:#132045}
+    .btn.primary{background:linear-gradient(180deg,#0e2a4a,#143867);border-color:#295a93}
+    .btn.primary:hover{filter:brightness(1.07)}
+    .btn.ghost{background:transparent}
+    .list{margin-top:14px}
+    .item{display:grid;grid-template-columns:28px 1fr auto 160px auto;gap:10px;align-items:center;background:#0e1630;border:1px solid #1f2a4a;border-radius:12px;padding:10px 12px;margin-bottom:10px}
+    .handle{cursor:grab;opacity:.8}
+    .name{font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .meta{font-size:12px;color:var(--muted)}
+    .range{display:flex;align-items:center;gap:6px}
+    input[type="text"],input[type="number"]{background:#0c1530;border:1px solid #253562;border-radius:10px;color:var(--text);padding:8px 10px}
+    input[type="file"]{display:none}
+    .chips{display:flex;gap:8px;flex-wrap:wrap}
+    .chip{font-size:12px;padding:6px 8px;border-radius:999px;border:1px solid #2a3a6a;background:#0f1a35}
+    footer{margin-top:20px;color:var(--muted);font-size:12px;text-align:center}
+    @media (max-width:720px){.item{grid-template-columns:24px 1fr;grid-auto-rows:auto}.item .actions,.item .range,.item .pages{grid-column:1/-1}}
+  </style>
+  <!-- pdf-lib for merging/extracting pages -->
+  <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+  <!-- SortableJS for drag-and-drop reordering -->
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>PDF結合・順番入れ替え・削除（完全クライアントサイド / GitHub Pages対応）</h1>
+  </header>
+  <div class="container">
+    <div class="panel">
+      <div class="row" style="align-items:center; justify-content:space-between">
+        <div class="filedrop" id="drop">
+          <p style="margin:6px 0 10px 0; font-weight:700">ここにPDFをドラッグ＆ドロップ</p>
+          <div class="chips">
+            <span class="chip">複数可</span>
+            <span class="chip">順番をドラッグで変更</span>
+            <span class="chip">不要なファイルは削除</span>
+            <span class="chip">ページ範囲の指定も可</span>
+          </div>
+          <p class="hint" style="margin-top:10px">または…</p>
+          <label class="btn" for="file">ファイルを選択</label>
+          <input id="file" type="file" accept="application/pdf" multiple />
+        </div>
+        <div class="row" style="gap:8px">
+          <button class="btn ghost" id="clearList">リストを空にする</button>
+          <button class="btn primary" id="merge">結合してダウンロード</button>
+        </div>
+      </div>
+
+      <div class="list" id="list"></div>
+
+      <footer>
+        <div>処理はすべてブラウザ内で完結し、ファイルは外部に送信されません。</div>
+        <div>© 2025 PDF Merger – Powered by <code>pdf-lib</code> & <code>SortableJS</code></div>
+      </footer>
+    </div>
+  </div>
+
+<script>
+/**
+ * Utility: format file size
+ */
+function fmtBytes(bytes){
+  if(bytes===0) return '0 B';
+  const k=1024; const sizes=['B','KB','MB','GB'];
+  const i=Math.floor(Math.log(bytes)/Math.log(k));
+  return parseFloat((bytes/Math.pow(k,i)).toFixed(2))+' '+sizes[i];
+}
+
+/**
+ * Parse page range like:
+ *  - "all" or "" => entire document
+ *  - "1-3,5,8-" => 1..3, 5, 8..last
+ *  Note: 1-based input, returns 0-based unique sorted indices
+ */
+function parseRange(input, totalPages){
+  const set = new Set();
+  const s = (input||'').trim().toLowerCase();
+  if(!s || s==='all' || s==='*'){ for(let i=0;i<totalPages;i++) set.add(i); return [...set]; }
+  const parts = s.split(',').map(p=>p.trim()).filter(Boolean);
+  for(const p of parts){
+    const m = p.match(/^(\d+)?\s*-\s*(\d+)?$/);
+    if(m){
+      let start = m[1]? Number(m[1]) : 1;
+      let end   = m[2]? Number(m[2]) : totalPages; // open-ended
+      if(Number.isNaN(start) || Number.isNaN(end)) continue;
+      start = Math.max(1, Math.min(start, totalPages));
+      end   = Math.max(1, Math.min(end, totalPages));
+      if(start> end) [start,end] = [end,start];
+      for(let i=start-1; i<=end-1; i++) set.add(i);
+    } else {
+      const n = Number(p);
+      if(!Number.isNaN(n) && n>=1 && n<=totalPages) set.add(n-1);
+    }
+  }
+  return [...set].sort((a,b)=>a-b);
+}
+
+// App state
+const state = {
+  items: [] // {id, file, name, size, arrayBuffer, pageCount, range}
+};
+
+const listEl = document.getElementById('list');
+
+function renderList(){
+  listEl.innerHTML = '';
+  if(state.items.length===0){
+    const empty = document.createElement('div');
+    empty.className = 'hint';
+    empty.style.padding = '6px 4px';
+    empty.textContent = 'PDFが追加されるとここに表示されます。';
+    listEl.appendChild(empty);
+    return;
+  }
+
+  for(const item of state.items){
+    const row = document.createElement('div');
+    row.className = 'item';
+    row.dataset.id = String(item.id);
+
+    const handle = document.createElement('div');
+    handle.className = 'handle';
+    handle.title = 'ドラッグで並べ替え';
+    handle.innerHTML = '≡';
+
+    const nameBox = document.createElement('div');
+    const name = document.createElement('div');
+    name.className = 'name';
+    name.textContent = item.name;
+    const meta = document.createElement('div');
+    meta.className = 'meta pages';
+    meta.textContent = `サイズ: ${fmtBytes(item.size)} / ページ数: ${item.pageCount ?? '計測中…'}`;
+    nameBox.appendChild(name);
+    nameBox.appendChild(meta);
+
+    const spacer = document.createElement('div');
+
+    const rangeBox = document.createElement('div');
+    rangeBox.className = 'range';
+    const label = document.createElement('label');
+    label.textContent = 'ページ範囲:';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = '例: 1-3,6  / 空欄=全ページ';
+    input.value = item.range || '';
+    input.addEventListener('input', ()=>{ item.range = input.value; });
+    rangeBox.appendChild(label);
+    rangeBox.appendChild(input);
+
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+    const del = document.createElement('button');
+    del.className = 'btn';
+    del.textContent = '削除';
+    del.addEventListener('click', ()=>{
+      const idx = state.items.findIndex(x=>x.id===item.id);
+      if(idx>=0){ state.items.splice(idx,1); renderList(); }
+    });
+    actions.appendChild(del);
+
+    row.appendChild(handle);
+    row.appendChild(nameBox);
+    row.appendChild(spacer);
+    row.appendChild(rangeBox);
+    row.appendChild(actions);
+
+    listEl.appendChild(row);
+  }
+}
+
+// Enable drag & drop reordering with SortableJS
+new Sortable(listEl, {
+  handle: '.handle',
+  animation: 150,
+  onEnd: (evt)=>{
+    const oldIndex = evt.oldIndex;
+    const newIndex = evt.newIndex;
+    if(oldIndex===newIndex) return;
+    const moved = state.items.splice(oldIndex,1)[0];
+    state.items.splice(newIndex,0,moved);
+    renderList();
+  }
+});
+
+// File input & dropzone
+const inputEl = document.getElementById('file');
+const dropEl = document.getElementById('drop');
+
+function preventDefaults(e){ e.preventDefault(); e.stopPropagation(); }
+['dragenter','dragover','dragleave','drop'].forEach(ev=>{
+  dropEl.addEventListener(ev, preventDefaults, false)
+});
+['dragenter','dragover'].forEach(ev=>{
+  dropEl.addEventListener(ev, ()=>dropEl.classList.add('drag'))
+});
+['dragleave','drop'].forEach(ev=>{
+  dropEl.addEventListener(ev, ()=>dropEl.classList.remove('drag'))
+});
+
+inputEl.addEventListener('change', (e)=>{
+  const files = Array.from(e.target.files||[]);
+  if(files.length) addFiles(files);
+  inputEl.value = '';
+});
+
+dropEl.addEventListener('drop', (e)=>{
+  const files = Array.from(e.dataTransfer.files||[]).filter(f=>f.type==='application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+  if(files.length) addFiles(files);
+});
+
+let idSeq=1;
+async function addFiles(files){
+  for(const f of files){
+    const arrayBuffer = await f.arrayBuffer();
+    let pageCount = null;
+    try{ const doc = await PDFLib.PDFDocument.load(arrayBuffer); pageCount = doc.getPageCount(); }catch(err){ console.error('PDF load failed', err); }
+    state.items.push({ id:idSeq++, file:f, name:f.name, size:f.size, arrayBuffer, pageCount, range:'' });
+  }
+  renderList();
+}
+
+// Merge action
+const mergeBtn = document.getElementById('merge');
+mergeBtn.addEventListener('click', async ()=>{
+  if(state.items.length===0){ alert('PDFが追加されていません。'); return; }
+  mergeBtn.disabled = true; mergeBtn.textContent = '結合中…';
+  try{
+    const out = await mergeCurrentList();
+    const blob = new Blob([out], {type:'application/pdf'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const now = new Date();
+    const ts = now.toISOString().replace(/[-:T]/g,'').slice(0,14);
+    a.href = url; a.download = `merged_${ts}.pdf`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }catch(err){
+    console.error(err);
+    alert('結合中にエラーが発生しました。PDFが破損していないかご確認ください。');
+  }finally{
+    mergeBtn.disabled = false; mergeBtn.textContent = '結合してダウンロード';
+  }
+});
+
+async function mergeCurrentList(){
+  const outDoc = await PDFLib.PDFDocument.create();
+  for(const item of state.items){
+    const srcDoc = await PDFLib.PDFDocument.load(item.arrayBuffer);
+    const total = srcDoc.getPageCount();
+    const picks = parseRange(item.range, total); // 0-based indices
+    const indices = (picks.length>0? picks : Array.from({length:total},(_,i)=>i));
+    const copied = await outDoc.copyPages(srcDoc, indices);
+    for(const p of copied){ outDoc.addPage(p); }
+  }
+  const outBytes = await outDoc.save({
+    addDefaultPage: false,
+    updateFieldAppearances: true,
+  });
+  return outBytes;
+}
+
+// Clear list
+const clearBtn = document.getElementById('clearList');
+clearBtn.addEventListener('click', ()=>{ state.items = []; renderList(); });
+
+// Initial
+renderList();
+</script>
+</body>
+</html>
