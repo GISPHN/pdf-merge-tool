@@ -34,6 +34,10 @@
     footer{margin-top:20px;color:var(--muted);font-size:12px;text-align:center}
     @media (max-width:720px){.item{grid-template-columns:24px 1fr;grid-auto-rows:auto}.item .actions,.item .range,.item .pages{grid-column:1/-1}}
   </style>
+  <style>
+    .option-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:10px}
+    .check{display:flex;align-items:center;gap:8px}
+  </style>
   <!-- pdf-lib for merging/extracting pages -->
   <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
   <!-- SortableJS for drag-and-drop reordering -->
@@ -58,10 +62,14 @@
           <label class="btn" for="file">ファイルを選択</label>
           <input id="file" type="file" accept="application/pdf" multiple />
         </div>
-        <div class="row" style="gap:8px">
-          <button class="btn ghost" id="clearList">リストを空にする</button>
-          <button class="btn primary" id="merge">結合してダウンロード</button>
+        <div class=\"row\" style=\"gap:8px\"> 
+          <button class=\"btn ghost\" id=\"clearList\">リストを空にする</button>
+          <button class=\"btn primary\" id=\"merge\">結合してダウンロード</button>
         </div>
+      </div>
+
+      <div class=\"option-row\">
+        <label class=\"check\"><input type=\"checkbox\" id=\"addPageNumbers\" /> ページ番号を付与（下部・連番）</label>
       </div>
 
       <div class="list" id="list"></div>
@@ -115,6 +123,7 @@ function parseRange(input, totalPages){
 
 // App state
 const state = {
+  addPageNumbers: false,
   items: [] // {id, file, name, size, arrayBuffer, pageCount, range}
 };
 
@@ -239,6 +248,8 @@ async function addFiles(files){
 
 // Merge action
 const mergeBtn = document.getElementById('merge');
+const addNumEl = document.getElementById('addPageNumbers');
+addNumEl.addEventListener('change', ()=>{ state.addPageNumbers = addNumEl.checked; });
 mergeBtn.addEventListener('click', async ()=>{
   if(state.items.length===0){ alert('PDFが追加されていません。'); return; }
   mergeBtn.disabled = true; mergeBtn.textContent = '結合中…';
@@ -270,10 +281,25 @@ async function mergeCurrentList(){
     const copied = await outDoc.copyPages(srcDoc, indices);
     for(const p of copied){ outDoc.addPage(p); }
   }
-  const outBytes = await outDoc.save({
-    addDefaultPage: false,
-    updateFieldAppearances: true,
-  });
+
+  // ページ番号（下部・中央）を付与（オプション）
+  if(state.addPageNumbers){
+    const font = await outDoc.embedFont(PDFLib.StandardFonts.Helvetica);
+    const pages = outDoc.getPages();
+    const total = pages.length;
+    const fontSize = 10;
+    const marginBottom = 18; // 下余白
+    pages.forEach((page, i)=>{
+      const { width, height } = page.getSize();
+      const text = String(i+1);
+      const textWidth = font.widthOfTextAtSize(text, fontSize);
+      const x = (width - textWidth) / 2;
+      const y = marginBottom;
+      page.drawText(text, { x, y, size: fontSize, font });
+    });
+  }
+
+  const outBytes = await outDoc.save({ addDefaultPage: false, updateFieldAppearances: true });
   return outBytes;
 }
 
