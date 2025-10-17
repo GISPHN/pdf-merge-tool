@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PDF Merger / Reorder / Delete (Client-only)</title>
+  <title>PDF Merger / Reorder / Delete (Client‑only)</title>
   <style>
     :root { --bg:#0b1020; --panel:#11182a; --muted:#aab3c5; --accent:#4cc9f0; --text:#e8eefc; }
     html,body{height:100%;}
@@ -33,8 +33,13 @@
     .chip{font-size:12px;padding:6px 8px;border-radius:999px;border:1px solid #2a3a6a;background:#0f1a35}
     footer{margin-top:20px;color:var(--muted);font-size:12px;text-align:center}
     @media (max-width:720px){.item{grid-template-columns:24px 1fr;grid-auto-rows:auto}.item .actions,.item .range,.item .pages{grid-column:1/-1}}
+  </style>
+  <style>
     .option-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:10px}
     .check{display:flex;align-items:center;gap:8px}
+    .x-link{display:inline-flex;align-items:center;gap:6px;color:var(--text);text-decoration:none;border-bottom:1px dashed #2a3a6a}
+    .x-link:hover{color:var(--accent);border-bottom-color:var(--accent)}
+    .x-link svg{width:14px;height:14px}
   </style>
   <!-- pdf-lib for merging/extracting pages -->
   <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
@@ -60,21 +65,21 @@
           <label class="btn" for="file">ファイルを選択</label>
           <input id="file" type="file" accept="application/pdf" multiple />
         </div>
-        <div class="row" style="gap:8px">
-          <button class="btn ghost" id="clearList">リストを空にする</button>
-          <button class="btn primary" id="merge">結合してダウンロード</button>
+        <div class=\"row\" style=\"gap:8px\"> 
+          <button class=\"btn ghost\" id=\"clearList\">リストを空にする</button>
+          <button class=\"btn primary\" id=\"merge\">結合してダウンロード</button>
         </div>
       </div>
 
-      <div class="option-row">
-        <label class="check"><input type="checkbox" id="addPageNumbers" /> ページ番号を追加する</label>
+      <div class=\"option-row\">
+        <label class=\"check\"><input type=\"checkbox\" id=\"addPageNumbers\" /> ページ番号を付与（下部・連番）</label>
       </div>
 
       <div class="list" id="list"></div>
 
       <footer>
         <div>処理はすべてブラウザ内で完結し、ファイルは外部に送信されません。</div>
-        <div>© 2025 PDF Merger – Powered by <code>pdf-lib</code> & <code>SortableJS</code></div>
+        <div>作成者: <a class="x-link" href="https://x.com/GISPHN" target="_blank" rel="noopener noreferrer" aria-label="X: @GISPHN"><svg viewBox="0 0 24 24" role="img" aria-hidden="true"><path fill="currentColor" d="M18.244 2H21L13.5 10.353 22 22h-6.244l-5.178-6.86L4.5 22H2l8.06-9.351L2 2h6.244l4.73 6.258L18.244 2zm-1.09 18h2.019L7.927 4H5.908l11.246 16z"/></svg><span>@GISPHN</span></a></div>
       </footer>
     </div>
   </div>
@@ -271,8 +276,6 @@ mergeBtn.addEventListener('click', async ()=>{
 
 async function mergeCurrentList(){
   const outDoc = await PDFLib.PDFDocument.create();
-
-  // 1) ファイルごとに選択ページをコピーして追加
   for(const item of state.items){
     const srcDoc = await PDFLib.PDFDocument.load(item.arrayBuffer);
     const total = srcDoc.getPageCount();
@@ -282,25 +285,23 @@ async function mergeCurrentList(){
     for(const p of copied){ outDoc.addPage(p); }
   }
 
-  // 2) ページ番号（下部・中央）を付与（オプション）
-  // ※ 連番は結合後の通しで必ず 1 から始まります。
+  // ページ番号（下部・中央）を付与（オプション）
   if(state.addPageNumbers){
     const font = await outDoc.embedFont(PDFLib.StandardFonts.Helvetica);
     const pages = outDoc.getPages();
+    const total = pages.length;
     const fontSize = 10;
-    const marginBottom = 18; // 下余白(px相当)
-
+    const marginBottom = 18; // 下余白
     pages.forEach((page, i)=>{
-      const { width } = page.getSize();
-      const text = String(i+1);                 // 1,2,3,…
+      const { width, height } = page.getSize();
+      const text = String(i+1);
       const textWidth = font.widthOfTextAtSize(text, fontSize);
-      const x = (width - textWidth) / 2;        // 中央揃え
+      const x = (width - textWidth) / 2;
       const y = marginBottom;
       page.drawText(text, { x, y, size: fontSize, font });
     });
   }
 
-  // 3) 出力
   const outBytes = await outDoc.save({ addDefaultPage: false, updateFieldAppearances: true });
   return outBytes;
 }
